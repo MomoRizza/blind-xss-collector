@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node test/unit.mjs",
+    "test:e2e": "node test/e2e.mjs"
+  }
+}

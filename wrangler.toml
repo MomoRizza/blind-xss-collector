@@ -1,0 +1,13 @@
+name = "blind-xss-collector"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+
+# Dashboard auth key — set with: npx wrangler secret put AUTH_KEY
+# (or put a throwaway here for local `wrangler dev`)
+[vars]
+# AUTH_KEY is provided as a secret in production; do not commit a real one.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bxss"
+database_id = "REPLACE_WITH_D1_ID"   # from: npx wrangler d1 create bxss
