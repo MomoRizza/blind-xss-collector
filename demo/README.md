@@ -12,7 +12,7 @@ npx wrangler d1 execute bxss --local --file=schema.sql
 # add a dev key in wrangler.toml under [vars]:  AUTH_KEY = "devkey"
 npx wrangler dev            # → http://127.0.0.1:8787
 ```
-Open the dashboard: `http://127.0.0.1:8787/?key=devkey`
+Open the dashboard: `http://127.0.0.1:8787/` and sign in with `devkey`
 (You can also point the test at your **deployed** worker host instead of `wrangler dev`.)
 
 ## 2. Start this test app

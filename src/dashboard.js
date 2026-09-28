@@ -1,7 +1,45 @@
-// Operator dashboard, served from GET / (auth-gated by ?key=AUTH_KEY).
-// Two views: live Sessions (captures + interactive commands) and a Payload
-// Generator that mints a unique token per injection point and emits ready-to-
-// inject payloads for every context, plus a local token->surface registry.
+// Operator dashboard + login page. Access is gated by a signed HttpOnly session
+// cookie set at POST /login (no credential in the URL). The dashboard has two
+// views: live Sessions (captures + interactive commands) and a Payload Generator
+// that mints a unique token per injection point and emits ready-to-inject payloads.
+const FAVICON = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzBhMGMxMCIvPjxjaXJjbGUgY3g9IjE2IiBjeT0iMTYiIHI9IjkiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRjOWZmZiIgc3Ryb2tlLXdpZHRoPSIyIi8+PGNpcmNsZSBjeD0iMTYiIGN5PSIxNiIgcj0iMi42IiBmaWxsPSIjM2ZiOTUwIi8+PHBhdGggZD0iTTE2IDIuNXY1LjVNMTYgMjR2NS41TTIuNSAxNkg4TTI0IDE2aDUuNSIgc3Ryb2tlPSIjNGM5ZmZmIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvc3ZnPg==';
+
+// ---- login page (served at GET / when there is no valid session cookie) ----
+export const LOGIN = `<!doctype html><meta charset=utf-8><title>bxss · sign in</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<link rel=icon type=image/svg+xml href="${FAVICON}">
+<style>
+ :root{--bg:#08090b;--panel:#0f1115;--line:#20242c;--fg:#d5dae1;--dim:#7d8590;--accent:#4c9fff;--pink:#ff7b72}
+ *{box-sizing:border-box}
+ body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,Menlo,monospace}
+ form{background:linear-gradient(180deg,#0f1115,#0b0d10);border:1px solid var(--line);border-radius:12px;padding:28px 26px;width:320px;text-align:center}
+ .lg{margin-bottom:10px}
+ h1{font-size:15px;margin:0 0 2px}
+ .sub{color:var(--dim);font-size:12px;margin-bottom:18px}
+ input{width:100%;background:#0b0d10;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:inherit;margin-bottom:10px}
+ input:focus{outline:none;border-color:var(--accent)}
+ button{width:100%;background:#238636;border:1px solid #2ea043;color:#fff;border-radius:8px;padding:10px;font:inherit;font-weight:600;cursor:pointer}
+ button:hover{background:#2ea043}
+ .err{color:var(--pink);font-size:12px;min-height:16px;margin-top:10px}
+</style>
+<form id=f onsubmit="return go(event)">
+ <div class=lg><svg width=34 height=34 viewBox="0 0 32 32"><circle cx=16 cy=16 r=9 fill=none stroke="#4c9fff" stroke-width=2></circle><circle cx=16 cy=16 r=2.6 fill="#3fb950"></circle><path d="M16 2.5v5.5M16 24v5.5M2.5 16H8M24 16h5.5" stroke="#4c9fff" stroke-width=2 stroke-linecap=round></path></svg></div>
+ <h1>blind-xss-collector</h1>
+ <div class=sub>operator sign in</div>
+ <input id=pw type=password placeholder="password" autofocus autocomplete=current-password>
+ <button>Sign in</button>
+ <div id=err class=err></div>
+</form>
+<script>
+async function go(e){e.preventDefault();
+ var pw=document.getElementById('pw');
+ var r=await fetch('/login',{method:'POST',credentials:'same-origin',body:JSON.stringify({password:pw.value})});
+ if(r.ok){location.href='/';}
+ else{document.getElementById('err').textContent='Invalid password';pw.value='';pw.focus();}
+ return false;
+}
+</script>`;
+
 export const DASHBOARD = `<!doctype html><meta charset=utf-8><title>bxss · collector</title>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <link rel=icon type=image/svg+xml href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNyIgZmlsbD0iIzBhMGMxMCIvPjxjaXJjbGUgY3g9IjE2IiBjeT0iMTYiIHI9IjkiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzRjOWZmZiIgc3Ryb2tlLXdpZHRoPSIyIi8+PGNpcmNsZSBjeD0iMTYiIGN5PSIxNiIgcj0iMi42IiBmaWxsPSIjM2ZiOTUwIi8+PHBhdGggZD0iTTE2IDIuNXY1LjVNMTYgMjR2NS41TTIuNSAxNkg4TTI0IDE2aDUuNSIgc3Ryb2tlPSIjNGM5ZmZmIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvc3ZnPg==">
@@ -92,6 +130,7 @@ export const DASHBOARD = `<!doctype html><meta charset=utf-8><title>bxss · coll
   <div class=tab id=tab-gen onclick="tab('gen')">Payload Generator</div>
  </div>
  <div class=pill><span class=dot id=beat></span><b id=count>0</b> sessions</div>
+ <button class=btn onclick="logout()" style="margin-left:12px;padding:4px 12px">sign out</button>
 </header>
 
 <div id=sessions>
@@ -116,8 +155,10 @@ export const DASHBOARD = `<!doctype html><meta charset=utf-8><title>bxss · coll
 
 <div id=toast></div>
 <script>
-const key=new URLSearchParams(location.search).get('key')||'';
-const q=p=>fetch(p+(p.includes('?')?'&':'?')+'key='+encodeURIComponent(key)).then(r=>r.json());
+// auth is the HttpOnly session cookie (set at /login); it rides along on same-origin
+// fetches automatically. A 401 means the session expired -> bounce to the login page.
+const q=p=>fetch(p,{credentials:'same-origin'}).then(r=>{if(r.status===401){location.href='/';return[];}return r.json();});
+function logout(){fetch('/logout',{method:'POST',credentials:'same-origin'}).then(()=>location.href='/');}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function toast(m){var t=document.getElementById('toast');t.textContent=m;t.className='show';setTimeout(()=>t.className='',1300)}
 function copy(txt){navigator.clipboard.writeText(txt).then(()=>toast('copied')).catch(()=>toast('copy failed'))}
@@ -155,7 +196,7 @@ function renderList(){
 }
 async function delSession(sid){
   if(!confirm('Delete this session and all its captured data?'))return;
-  await fetch('/api/delete?key='+encodeURIComponent(key),{method:'POST',body:JSON.stringify({sid:sid})});
+  await fetch('/api/delete',{method:'POST',credentials:'same-origin',body:JSON.stringify({sid:sid})});
   if(cur===sid){cur=null;document.getElementById('detail').innerHTML='<div class=empty>select a session on the left</div>';}
   toast('session deleted');refresh();
 }
@@ -195,7 +236,7 @@ async function open_(sid){
 }
 async function send(cmd){
   cmd=cmd||document.getElementById('ci').value;if(!cmd||!cur)return;
-  await fetch('/api/cmd?key='+encodeURIComponent(key),{method:'POST',body:JSON.stringify({sid:cur,cmd})});
+  await fetch('/api/cmd',{method:'POST',credentials:'same-origin',body:JSON.stringify({sid:cur,cmd})});
   toast('queued');setTimeout(()=>open_(cur),1500);
 }
 

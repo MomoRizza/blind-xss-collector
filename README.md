@@ -33,6 +33,7 @@ cookies, storage, and screenshots your probe collects never touch a third-party 
 ## Table of contents
 - [Features](#features)
 - [How it works](#how-it-works)
+- [Authentication & security model](#authentication--security-model)
 - [Installation](#installation)
 - [Using the dashboard](#using-the-dashboard)
 - [Payloads](#payloads)
@@ -101,6 +102,39 @@ cookies, storage, and screenshots your probe collects never touch a third-party 
 
 ---
 
+## Authentication & security model
+
+**Single operator, session-cookie login — no credential in the URL.** Earlier builds gated the
+dashboard with `?key=…`, which leaks the secret into browser history, `Referer` headers, and
+proxy/CDN logs. That is gone. Instead:
+
+- **`POST /login`** with the password (your `AUTH_KEY`) sets a **signed, HttpOnly, `Secure`,
+  `SameSite=Strict`** session cookie — an HMAC-SHA256 token over an expiry (7 days), verified
+  statelessly (no session store). JavaScript on the page cannot read it, and it never appears in
+  a URL. **`POST /logout`** clears it. The password is verified in constant time.
+- The dashboard and every **`/api/*`** route require that cookie. For CLI/automation you may
+  instead send the password in an **`X-Auth-Key`** header (kept out of the URL). Nothing is ever
+  accepted from the query string.
+
+**Why the collector endpoints are intentionally public.** `/c/:token`, `/r/:token`, `/p/:token`,
+`/q/:sid`, and `/qr/:id` are unauthenticated **by necessity** — the probe executes in the
+*victim's* browser and cannot carry your operator secret; a blind-XSS callback has to be reachable
+without credentials. This is inherent to the technique, not a fixable flaw, and it matches how
+XSS Hunter / ezXSS work. The exposure is limited and low-impact:
+
+- The **sensitive data** (captured sessions, DOM, cookies, command results) lives only behind the
+  authenticated dashboard/API. The public routes never read it back out.
+- Tokens and `sid`s are random and unguessable; someone who does not know a live value cannot
+  meaningfully interact. The worst an attacker who *guesses* one could do is submit junk reports
+  or poll a random session — noise, not disclosure.
+
+**Hardening recommendations:** use a long random `AUTH_KEY` (`openssl rand -hex 32`) and rotate it
+per engagement; serve behind a custom domain over HTTPS; and **purge** collected data at close
+(see [Purging data](#purging-data)). The `Secure` cookie requires a secure origin — `https://` or
+`http://localhost` / `http://127.0.0.1`; a plain-`http` non-localhost host will not retain it.
+
+---
+
 ## Installation
 
 ### Prerequisites
@@ -125,7 +159,8 @@ wrangler d1 create bxss
 # 2. create the tables
 wrangler d1 execute bxss --remote --file=schema.sql
 
-# 3. set the dashboard password (a long random string, e.g. `openssl rand -hex 32`)
+# 3. set the operator password (a long random string, e.g. `openssl rand -hex 32`)
+#    this is the password you log in with; it is also the X-Auth-Key for CLI access
 wrangler secret put AUTH_KEY
 
 # 4. deploy
@@ -136,11 +171,12 @@ Wrangler prints your Worker URL. Verify:
 
 ```sh
 curl -s https://<host>/c/smoketest | head -c 80                       # probe JS
-curl -s -o /dev/null -w '%{http_code}\n' https://<host>/              # 401 (no key)
-curl -s -o /dev/null -w '%{http_code}\n' 'https://<host>/?key=KEY'    # 200
+curl -s https://<host>/ | grep -o 'operator sign in'                  # login page for anon
+curl -s -X POST https://<host>/login -d '{"password":"YOUR_PASSWORD"}' -i | grep -i set-cookie
 ```
 
-Open the dashboard at **`https://<host>/?key=YOUR_AUTH_KEY`**.
+Open **`https://<host>/`** and sign in with your `AUTH_KEY`. A signed **HttpOnly** session
+cookie is set (no credential ever appears in the URL). See [Authentication & security model](#authentication--security-model).
 
 ### Use an innocuous custom domain (recommended)
 Cloudflare dashboard → **Workers & Pages → your worker → Settings → Triggers → Custom Domains →
@@ -152,7 +188,7 @@ help against `script-src` allowlists.
 
 ## Using the dashboard
 
-The dashboard (`/?key=…`) has two tabs.
+Open `https://<host>/`, sign in, and you land on the dashboard — two tabs, plus a **sign out** button in the header.
 
 ### Sessions
 - **Live feed** of every session, newest first. A **pulsing green dot** means that victim's tab
@@ -263,10 +299,10 @@ Run the whole stack locally — no Cloudflare account needed.
 ```sh
 # 1. local D1 + a dev key
 wrangler d1 execute bxss --local --file=schema.sql
-echo 'AUTH_KEY = "devkey"' > .dev.vars      # gitignored, dev only
+echo 'AUTH_KEY = "devkey"' > .dev.vars      # gitignored; this is your login password in dev
 
 # 2. the real collector (runs the actual worker.js)
-wrangler dev                                 # → http://127.0.0.1:8787  (dashboard: /?key=devkey)
+wrangler dev                                 # → http://127.0.0.1:8787  (open it, sign in with: devkey)
 
 # 3. the mock vulnerable app to fire against
 npm run demo                                 # → http://127.0.0.1:8080
@@ -317,15 +353,19 @@ with the **×** on its row in the dashboard.
 | `/p/:token` | GET | public | Chunked image-beacon report (CSP fallback) |
 | `/q/:sid` | GET | public | Probe polls for queued commands |
 | `/qr/:id` | POST | public | Probe returns a command result |
-| `/` | GET | key | Operator dashboard |
-| `/api/sessions` | GET | key | List sessions |
-| `/api/reports?sid=` | GET | key | Reports for one session |
-| `/api/cmdresults?sid=` | GET | key | Commands + results for one session |
-| `/api/cmd` | POST | key | Queue a command `{sid, cmd}` |
-| `/api/delete` | POST | key | Delete a session `{sid}` and its data |
+| `/login` | POST | public | Exchange the password for a session cookie |
+| `/logout` | POST | cookie | Clear the session cookie |
+| `/` | GET | cookie | Operator dashboard (login page if unauthenticated) |
+| `/api/sessions` | GET | cookie | List sessions |
+| `/api/reports?sid=` | GET | cookie | Reports for one session |
+| `/api/cmdresults?sid=` | GET | cookie | Commands + results for one session |
+| `/api/cmd` | POST | cookie | Queue a command `{sid, cmd}` |
+| `/api/delete` | POST | cookie | Delete a session `{sid}` and its data |
 
-Public collector routes carry no secret (the victim's browser has none); only the dashboard and
-`/api/*` require `AUTH_KEY`, compared in constant time.
+The probe (`/c`) and callback routes (`/r`, `/p`, `/q`, `/qr`) are **public by necessity** — the
+victim's browser holds no secret. The dashboard and `/api/*` require the session cookie (or the
+`X-Auth-Key` header for CLI); no credential is ever accepted from the URL. See
+[Authentication & security model](#authentication--security-model).
 
 ---
 
@@ -334,7 +374,8 @@ Public collector routes carry no secret (the victim's browser has none); only th
 | Symptom | Fix |
 |---|---|
 | `wrangler deploy` fails on D1 | `database_id` in `wrangler.toml` is still the placeholder, or you didn't run `d1 create bxss`. |
-| Dashboard returns `401` | Missing/wrong `?key=`; it must match the `AUTH_KEY` secret. |
+| Login says invalid password | The password must match the `AUTH_KEY` secret (`wrangler secret put AUTH_KEY`). |
+| Signed in but bounced back to login | The `Secure` session cookie needs a secure origin. `https://` and `http://localhost` / `http://127.0.0.1` work; a plain-`http` non-localhost host will not keep the cookie — deploy behind Cloudflare's HTTPS. |
 | Probe serves but no session appears | The page's CSP blocks the exfil channels — check for strict `connect-src` **and** `img-src`; use the inline beacon in `payloads.md`. |
 | Session shows but commands never complete | The victim tab closed (grey dot). Live commands need the tab open; the automatic capture is still valid. |
 | `no such table` | Schema not loaded — run `d1 execute bxss --remote --file=schema.sql`. |

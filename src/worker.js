@@ -10,7 +10,7 @@
 //   GET  /api/*          dashboard data              (auth)
 //   POST /api/cmd        queue an interactive command (auth)
 import { PROBE } from './probe.js';
-import { DASHBOARD } from './dashboard.js';
+import { DASHBOARD, LOGIN } from './dashboard.js';
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': '*' };
 const json = (o, init) => new Response(JSON.stringify(o), { ...(init || {}), headers: { 'Content-Type': 'application/json', ...CORS, ...((init && init.headers) || {}) } });
@@ -22,6 +22,30 @@ function ctEq(a, b) {                                          // constant-time 
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
   let r = 0; for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i); return r === 0;
 }
+
+// ---- session auth: signed, stateless HttpOnly cookie (single operator) ----
+const SESSION_MAX_AGE = 7 * 24 * 3600;                        // 7 days
+async function hmacHex(key, msg) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(msg));
+  return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+async function makeSession(key) {                             // "<expMs>.<hmac(exp)>"
+  const exp = Date.now() + SESSION_MAX_AGE * 1000;
+  return exp + '.' + await hmacHex(key, 'bx.' + exp);
+}
+async function verifySession(key, token) {
+  if (!key || !token) return false;
+  const i = token.indexOf('.'); if (i < 0) return false;
+  const exp = token.slice(0, i), sig = token.slice(i + 1);
+  if (!/^[0-9]+$/.test(exp) || +exp < Date.now()) return false;   // expired / malformed
+  return ctEq(sig, await hmacHex(key, 'bx.' + exp));
+}
+function cookie(req, name) {
+  const m = (req.headers.get('Cookie') || '').match(new RegExp('(?:^|; )' + name + '=([^;]+)'));
+  return m ? m[1] : '';
+}
+const setCookie = v => `bx_session=${v}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${v ? SESSION_MAX_AGE : 0}`;
 
 export default {
   async fetch(req, env) {
@@ -83,12 +107,25 @@ export default {
       return json({ ok: true });
     }
 
-    // ================= dashboard (auth-gated) =================
-    const key = url.searchParams.get('key') || '';
-    const authed = !!(env.AUTH_KEY && key && ctEq(key, env.AUTH_KEY));
+    // ================= operator auth (login cookie, no key-in-URL) =================
+    // POST /login {password} -> sets a signed HttpOnly session cookie
+    if (path === '/login' && req.method === 'POST') {
+      const b = await readBody(req);
+      if (env.AUTH_KEY && typeof b.password === 'string' && ctEq(b.password, env.AUTH_KEY))
+        return json({ ok: true }, { headers: { 'Set-Cookie': setCookie(await makeSession(env.AUTH_KEY)) } });
+      return json({ ok: false, error: 'invalid password' }, { status: 401 });
+    }
+    if (path === '/logout' && req.method === 'POST')
+      return json({ ok: true }, { headers: { 'Set-Cookie': setCookie('') } });
 
-    if (path === '/' ) {
-      if (!authed) return new Response('unauthorized — append ?key=YOUR_AUTH_KEY', { status: 401 });
+    // authed via the session cookie (browser) OR an X-Auth-Key header (CLI/automation).
+    // No credential is ever accepted from the URL/query string.
+    const hdrKey = req.headers.get('X-Auth-Key') || '';
+    const authed = (await verifySession(env.AUTH_KEY, cookie(req, 'bx_session'))) ||
+      !!(env.AUTH_KEY && hdrKey && ctEq(hdrKey, env.AUTH_KEY));
+
+    if (path === '/') {
+      if (!authed) return new Response(LOGIN, { headers: { 'Content-Type': 'text/html' } });
       return new Response(DASHBOARD, { headers: { 'Content-Type': 'text/html' } });
     }
     if (seg[0] === 'api') {
