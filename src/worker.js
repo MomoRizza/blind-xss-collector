@@ -110,6 +110,12 @@ export default {
         await DB.prepare('INSERT INTO commands(sid,cmd,created) VALUES(?,?,?)').bind(b.sid, b.cmd, Date.now()).run();
         return json({ ok: true });
       }
+      if (seg[1] === 'delete' && req.method === 'POST') {         // delete one session and all its data
+        const sid = (await readBody(req)).sid || url.searchParams.get('sid');
+        if (sid) for (const t of ['reports', 'sessions', 'commands', 'chunks'])
+          await DB.prepare('DELETE FROM ' + t + ' WHERE sid=?').bind(sid).run();
+        return json({ ok: true });
+      }
     }
     return new Response('blind-xss-collector', { status: 404 });
   }

