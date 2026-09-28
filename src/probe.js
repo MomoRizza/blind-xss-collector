@@ -3,7 +3,7 @@
 // resulting string before serving it from GET /c/:token.
 // Authorized security testing only.
 
-function probeFn() {
+export const PROBE = `(function () {
   'use strict';
   var TOKEN = '__TOKEN__', BASE = '__BASE__';
   if (window.__bx) { return; } window.__bx = 1;              // fire once per document
@@ -133,6 +133,4 @@ function probeFn() {
     setTimeout(poll, 5000);                                   // keep session live while tab is open
   }
   setTimeout(poll, 3000);
-}
-
-export const PROBE = '(' + probeFn.toString() + ')();';
+})();`;
